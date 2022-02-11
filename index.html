@@ -1,0 +1,324 @@
+<style type=text/css>
+	body {
+		background-color:  #000;
+		color: #aaa;
+	}
+</style>
+<template id="logCSS">
+	<style>
+		:host {
+			position: relative;
+			contain: content;
+			max-height: 100%;
+			max-width: 100%;
+		}
+		div {
+			-webkit-user-select: none;
+			user-select: none;
+		}
+		#logEntries {
+			max-height: 100%;
+			max-width: 100%;
+			contain: content;
+			overflow-y: hidden;
+		}
+		#logEntries :first-child {
+			padding-top: 4.2em;
+		}
+		.trace {
+			color: #888;
+		}
+		.trace::before, #filterButtons ::slotted([filter="trace"])::before {
+			content: '🔍';
+		}
+		.debug {
+			color: yellow;
+		}
+		.debug::before, #filterButtons ::slotted([filter="debug"])::before {
+			content: '🐛';
+		}
+		.info {
+			color: green;
+		}
+		.info::before, #filterButtons ::slotted([filter="info"])::before {
+			content: '✨';
+		}
+		.warn {
+			color: magenta;
+		}
+		.warn::before, #filterButtons ::slotted([filter="warn"])::before {
+			content: '⚠️';
+		}
+		.error {
+			color: red;
+		}
+		.error::before, #filterButtons ::slotted([filter="error"])::before {
+			content: '🚨';
+		}
+		.fatal {
+			background-color: red;
+			color: white;
+		}
+		.fatal::before, #filterButtons ::slotted([filter="fatal"])::before {
+			content: '💀';
+		}
+		.ns {
+			color: cyan;
+		}
+		#filterButtons ::slotted(*) {
+			padding: 5px;
+			color: #f7f7ac;
+			font-size: 18pt;
+		}
+		#filterButtons ::slotted(*:hover) {
+			color: #aaa;
+		}
+		#filterButtons {
+			background-color: rgba(0, 0, 0, 0.7);
+			padding: 0.5em;
+			position: fixed;
+			top: 0;
+			left: 0;
+		}
+	</style>
+	<div id="logEntries"></div>
+	<slot name="test">TEST MISSING</slot>
+	<div id="filterButtons">
+		<slot id="filters" name="filter">Filters Missing!</slot>
+		<div style="display: inline-block;" id="hosts"></div>
+	</div>
+</template>
+<script main="@empty">
+const parseJSON = () =>
+	new TransformStream({
+		transform(chunk, controller) {
+			controller.enqueue(JSON.parse(chunk));
+		}
+	});
+
+const splitStream = splitOn => {
+	let buffer = "";
+	return new TransformStream({
+		transform(chunk, controller) {
+			buffer += chunk;
+			const parts = buffer.split(splitOn);
+			parts.slice(0, -1).forEach(part => controller.enqueue(part));
+			buffer = parts[parts.length - 1];
+		},
+		flush(controller) {
+			if (buffer) controller.enqueue(buffer);
+		}
+	});
+};
+
+const fetchJSONLD = url =>
+	fetch(url).then(response => ({
+		response,
+		reader: response.body
+			.pipeThrough(new TextDecoderStream())
+			// Needed to stream by line and then JSON parse the line
+			.pipeThrough(splitStream("\n"))
+			.pipeThrough(parseJSON())
+			.getReader()
+	}));
+f = (async () => {
+	// const { fetchNDJSON } = await import("/api");
+	
+	const results = [];
+	let progress = 0;
+	
+	fetchJSONLD("/api").then(({ response, reader }) => {
+		const length = response.headers.get("Content-Length");
+		let received = 0;
+		
+		const onReadChunk = async chunk => {
+			if (chunk.done) {
+				
+				return;
+			}
+		
+			// await timeout(1000);
+			received += chunk.value.length;
+			results.push(chunk.value);
+			render(chunk.value);
+			progress = received / length;
+
+			reader.read().then(onReadChunk);
+		};
+		reader.read().then(onReadChunk);
+	});
+});
+//setTimeout(f, 1000);
+
+function htmlEscape(str) {
+	return str
+		.replace(/&/g, '&amp;')
+		.replace(/'/g, "'")
+		.replace(/"/g, '"')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;');
+}
+
+// The opposite function:
+function htmlUnescape(str) {
+	return str
+		.replace(/"/g, '"')
+		.replace(/'/g, "'")
+		.replace(/&/g, '&')
+		.replace(/</g, '&')
+		.replace(/>/g, '>');
+}
+
+var counter = 0;
+
+render = val => {
+	level = 'info';
+	switch(val["level"]) {
+		case 10:
+		level = 'trace'
+		break;
+		case 20:
+		level = 'debug'
+		break;
+		case 30:
+		level = 'info'
+		break;
+		case 40:
+		level = 'warn'
+		break;
+		case 50:
+		level = 'error'
+		break;
+		case 60:
+		level = 'fatal'
+		break;
+	}
+	var div = document.createElement('div');
+	var date = new Date(0);
+	date.setUTCMilliseconds(val["time"]);
+	// div.append('Fetched ndjson row ', ++counter, ' : ', JSON.stringify(val));
+	div.insertAdjacentHTML('beforeend', `<span style="color:#ccc">${date.toLocaleString('en-US')}</span> <span style='color:red;'>${val["hostname"]}</span> <span class="${level}"><span class='ns'>${val["ns"] || ''}</span> ${htmlEscape(val["msg"])}</span>`);
+	try{
+		if("err" in val && "stack" in val["err"])
+			div.insertAdjacentHTML('beforeend', `<div style="white-space: pre">${val["err"]["stack"]}</div>`);
+	} catch (err) {
+		console.log(err);
+	}
+	// document.getElementsByTagName('body')[0].append(div);
+	return div;
+}
+</script>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+	// https://stackoverflow.com/questions/9899372/pure-javascript-equivalent-of-jquerys-ready-how-to-call-a-function-when-t
+	document.addEventListener('DOMContentLoaded', (function() {
+		var socket = io();
+		let filter = 30;
+		let messageCount = 80;
+		// var messages = document.getElementById('messages');
+		var messageRoot = document.querySelector('#messages').attachShadow({mode: 'closed'});
+		var template = document.querySelector('#logCSS');
+		var clone = document.importNode(template.content, true);
+		messageRoot.appendChild(clone);
+		var messages = messageRoot.querySelector('#logEntries');
+		var filterButtons = messageRoot.querySelector("#filters");
+		var hostDiv = messageRoot.querySelector("#hosts");
+		var filters = filterButtons.assignedNodes({flatten: true});
+		let hosts = [];
+		for(let fb of filters) {
+			// console.log(fb);
+			fb.setAttribute('filter', fb.textContent);
+		}
+		filterButtons.addEventListener('click', (elem) => {
+			// console.log(elem);
+			switch(elem.srcElement.textContent) {
+				case 'trace':
+				filter = 10;
+				break;
+				case 'debug':
+				filter = 20;
+				break;
+				case 'info':
+				filter = 30;
+				break;
+				case 'warn':
+				filter = 40;
+				break;
+				case 'error':
+				filter = 50;
+				break;
+				case 'fatal':
+				filter = 60;
+				break;
+			}
+			messages.innerHTML = "";
+			for(let m of messageHistory) {
+				renderMessage(m);
+			}
+		})
+
+		var messageHistory = [];
+
+		window.addEventListener('resize', () => {
+			messages.scrollTo(0, messages.scrollHeight - messages.clientHeight);
+		});
+
+		function renderMessage(msg) {
+			// console.log(msg);
+			try {
+				message = JSON.parse(msg);
+				if (message.level < filter)
+					return;
+				element = render(message);
+				messages.appendChild(element);
+				// window.scrollTo(0, document.body.scrollHeight);
+				messages.scrollTo(0, messages.scrollHeight - messages.clientHeight);
+				while(messages.children.length > messageCount) {
+					messages.children[0].remove();
+				}
+				return;
+			} catch(e) {
+				// console.error(e);
+			}
+			var item = document.createElement('li');
+			item.textContent = msg;
+			messages.appendChild(item);
+			// window.scrollTo(0, document.body.scrollHeight);
+			messages.scrollTo(0, messages.scrollHeight - messages.clientHeight);
+			while(messages.children.length > messageCount) {
+				messages.children[0].remove();
+			}
+			// hostDiv.innerHTML = "";
+			// for(let host of hosts) {
+			// 	console.log(host);
+			// 	let hostElem = document.createElement('li');
+			// 	hostElem.textContent = host;
+			// 	hostDiv.appendChild(hostElem);
+			// }
+		}
+
+		//messageRoot.appendChild(messages);
+		socket.on('chat message', msg => {
+			messageHistory.push(msg);
+			try {
+				message = JSON.parse(msg);
+				if(message.hostname && !hosts.includes(message.hostname))
+					hosts.push(message.hostname);
+			} catch(e) {
+				// console.error(e);
+			}
+			while(messageHistory.length > 3000)
+				messageHistory.shift();
+			renderMessage(msg);
+		});
+	}), false);
+</script>
+<div id='messages'>
+	<span slot="test">Immortal</span>
+	<span slot="filter">trace</span>
+	<span slot="filter">debug</span>
+	<span slot="filter">info</span>
+	<span slot="filter">warn</span>
+	<span slot="filter">error</span>
+	<span slot="filter">fatal</span>
+</div>
